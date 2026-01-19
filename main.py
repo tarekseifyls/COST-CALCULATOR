@@ -16,7 +16,16 @@ from kivy.core.window import Window
 from kivy.metrics import dp
 from kivy.uix.togglebutton import ToggleButton
 from android.storage import primary_external_storage_path
+from kivy.utils import platform
 
+# --- ASK FOR PERMISSION ON ANDROID ---
+def request_android_permissions():
+    if platform == 'android':
+        from android.permissions import request_permissions, Permission
+        request_permissions([Permission.READ_EXTERNAL_STORAGE, Permission.WRITE_EXTERNAL_STORAGE])
+
+# Call this function immediately when the app starts
+request_android_permissions()
 
 # --- VISUAL THEME ---
 COLOR_BG = (0.1, 0.1, 0.1, 1)       # Dark Grey
@@ -399,3 +408,4 @@ class ImportApp(App):
 if __name__ == '__main__':
 
     ImportApp().run()
+
