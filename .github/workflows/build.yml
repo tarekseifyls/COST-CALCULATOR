@@ -1,11 +1,12 @@
-name: Build APK Manually
+name: Build APK Stable
 on:
   push:
     branches: [ main, master ]
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    # THE FIX: We specifically ask for Ubuntu 22.04 (Stable)
+    runs-on: ubuntu-22.04
 
     steps:
       - name: Checkout Code
@@ -16,7 +17,7 @@ jobs:
         with:
           python-version: '3.10'
 
-      # 1. Install the System Tools (Same as we did in Colab)
+      # 1. Install System Dependencies (Optimized for Ubuntu 22.04)
       - name: Install Dependencies
         run: |
           sudo apt-get update
@@ -29,18 +30,21 @@ jobs:
             openjdk-17-jdk unzip zip libltdl-dev
 
       # 2. Install Buildozer
-      - name: Install Buildozer & Cython
+      - name: Install Buildozer
         run: |
           pip install --upgrade pip
           pip install buildozer cython==0.29.33
 
-      # 3. Build the APK
+      # 3. Clean previous builds (Just in case)
+      - name: Cleanup
+        run: buildozer android clean
+
+      # 4. Build the APK
       - name: Build with Buildozer
         run: |
-          # We use 'yes' to accept the Android licenses automatically
           yes | buildozer android debug
 
-      # 4. Upload the Result
+      # 5. Upload the APK
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
