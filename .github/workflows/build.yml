@@ -1,11 +1,11 @@
-name: Build APK Stable
+name: Build APK Final
 on:
   push:
     branches: [ main, master ]
 
 jobs:
   build:
-    # THE FIX: We specifically ask for Ubuntu 22.04 (Stable)
+    # ubuntu-22.04 is the "Golden Standard" for Android builds right now
     runs-on: ubuntu-22.04
 
     steps:
@@ -17,7 +17,7 @@ jobs:
         with:
           python-version: '3.10'
 
-      # 1. Install System Dependencies (Optimized for Ubuntu 22.04)
+      # 1. Install System Dependencies
       - name: Install Dependencies
         run: |
           sudo apt-get update
@@ -29,22 +29,18 @@ jobs:
             libssl-dev autoconf libtool pkg-config \
             openjdk-17-jdk unzip zip libltdl-dev
 
-      # 2. Install Buildozer
+      # 2. Install Buildozer & Cython (Pinned for stability)
       - name: Install Buildozer
         run: |
           pip install --upgrade pip
           pip install buildozer cython==0.29.33
 
-      # 3. Clean previous builds (Just in case)
-      - name: Cleanup
-        run: buildozer android clean
-
-      # 4. Build the APK
+      # 3. Build the APK (We removed the 'clean' command)
       - name: Build with Buildozer
         run: |
           yes | buildozer android debug
 
-      # 5. Upload the APK
+      # 4. Upload the APK
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
