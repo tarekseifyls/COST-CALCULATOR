@@ -9,7 +9,7 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-    - name: Checkout Code
+    - name: Checkout repository
       uses: actions/checkout@v4
 
     - name: Set up Python
@@ -34,19 +34,27 @@ jobs:
           libssl-dev autoconf libtool pkg-config \
           unzip zip libltdl-dev
 
-    - name: Install Buildozer
+    - name: Install Python tools
       run: |
         pip install --upgrade pip
-        pip install buildozer cython==0.29.33
+        pip install buildozer cython==0.29.33 python-for-android
 
     - name: Increase Gradle memory
       run: |
         mkdir -p ~/.gradle
         echo "org.gradle.jvmargs=-Xmx4096m" >> ~/.gradle/gradle.properties
 
+    - name: Verify project files
+      run: |
+        echo "Current directory:"
+        pwd
+        echo "Files:"
+        ls -la
+        test -f buildozer.spec
+
     - name: Build APK
       run: |
-        buildozer android clean
+        rm -rf .buildozer
         buildozer android debug
 
     - name: Upload APK
@@ -54,4 +62,3 @@ jobs:
       with:
         name: CostCalculator-APK
         path: bin/*.apk
-
