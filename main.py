@@ -15,6 +15,8 @@ from kivy.uix.popup import Popup
 from kivy.core.window import Window
 from kivy.metrics import dp
 from kivy.uix.togglebutton import ToggleButton
+from android.storage import primary_external_storage_path
+
 
 # --- VISUAL THEME ---
 COLOR_BG = (0.1, 0.1, 0.1, 1)       # Dark Grey
@@ -231,7 +233,8 @@ class HomeScreen(Screen):
     def show_file_chooser(self, instance):
         # (File Chooser Logic Same as Before)
         content = BoxLayout(orientation='vertical')
-        filechooser = FileChooserIconView(path=os.getcwd(), filters=['*.xlsx'])
+        storage_path = primary_external_storage_path()
+        filechooser = FileChooserIconView(path=storage_path, filters=['*.xlsx'])
         btn_box = BoxLayout(size_hint_y=0.1)
         btn_load = Button(text="Load")
         btn_cancel = Button(text="Cancel")
@@ -394,4 +397,5 @@ class ImportApp(App):
         return sm
 
 if __name__ == '__main__':
+
     ImportApp().run()
