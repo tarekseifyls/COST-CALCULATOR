@@ -8,7 +8,7 @@ source.include_exts = py,png,jpg,kv,atlas,xlsx
 
 version = 0.1
 
-requirements = kivy,openpyxl,androidstorage4kivy
+requirements = kivy,openpyxl,androidstorage4kivy,et_xmlfile,jdcal
 
 orientation = portrait
 fullscreen = 0
@@ -22,4 +22,5 @@ android.permissions = READ_MEDIA_DOCUMENTS
 [buildozer]
 log_level = 2
 warn_on_root = 0
+
 
