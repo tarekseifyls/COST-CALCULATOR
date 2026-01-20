@@ -17,12 +17,14 @@ from kivy.core.window import Window
 from kivy.metrics import dp
 from kivy.utils import platform
 from kivy.clock import Clock
+from kivy.graphics import Color, Rectangle
 
 # --- VISUAL THEME ---
 COLOR_BG = (0.1, 0.1, 0.1, 1)       
 COLOR_ACCENT = (0, 0.8, 0.4, 1)     
 COLOR_TEXT = (1, 1, 1, 1)           
 COLOR_SUBTEXT = (0.7, 0.7, 0.7, 1)  
+COLOR_CARD_BG = (0.15, 0.15, 0.15, 1)
 
 # --- CONFIGURATION ---
 GLOBAL_SETTINGS = {
@@ -41,25 +43,29 @@ SESSION_STATE = {
 
 # --- PERMISSION LOGIC ---
 def request_android_permissions():
+    """ Only runs on Android. Safe to ignore on PC. """
     if platform == 'android':
-        from jnius import autoclass
-        from android.permissions import request_permissions, Permission
-        Build = autoclass('android.os.Build')
-        VERSION = autoclass('android.os.Build$VERSION')
-        if VERSION.SDK_INT >= 30:
-            Environment = autoclass('android.os.Environment')
-            if not Environment.isExternalStorageManager():
-                Intent = autoclass('android.content.Intent')
-                Settings = autoclass('android.provider.Settings')
-                Uri = autoclass('android.net.Uri')
-                PythonActivity = autoclass('org.kivy.android.PythonActivity')
-                intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION)
-                activity = PythonActivity.mActivity
-                package_uri = Uri.parse("package:" + activity.getPackageName())
-                intent.setData(package_uri)
-                activity.startActivity(intent)
-        else:
-            request_permissions([Permission.READ_EXTERNAL_STORAGE, Permission.WRITE_EXTERNAL_STORAGE])
+        try:
+            from jnius import autoclass
+            from android.permissions import request_permissions, Permission
+            Build = autoclass('android.os.Build')
+            VERSION = autoclass('android.os.Build$VERSION')
+            if VERSION.SDK_INT >= 30:
+                Environment = autoclass('android.os.Environment')
+                if not Environment.isExternalStorageManager():
+                    Intent = autoclass('android.content.Intent')
+                    Settings = autoclass('android.provider.Settings')
+                    Uri = autoclass('android.net.Uri')
+                    PythonActivity = autoclass('org.kivy.android.PythonActivity')
+                    intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION)
+                    activity = PythonActivity.mActivity
+                    package_uri = Uri.parse("package:" + activity.getPackageName())
+                    intent.setData(package_uri)
+                    activity.startActivity(intent)
+            else:
+                request_permissions([Permission.READ_EXTERNAL_STORAGE, Permission.WRITE_EXTERNAL_STORAGE])
+        except Exception as e:
+            print(f"Permission Error: {e}")
 
 # --- LOGIC ENGINE ---
 def process_excel_preserve_images(filepath):
@@ -69,29 +75,41 @@ def process_excel_preserve_images(filepath):
         
         # 1. EXTRACT IMAGES
         image_map = {}
-        temp_dir = App.get_running_app().user_data_dir 
+        temp_dir = os.path.abspath(App.get_running_app().user_data_dir)
+        if not os.path.exists(temp_dir):
+            os.makedirs(temp_dir)
         
         if hasattr(sheet, 'images'):
             for idx, img in enumerate(sheet.images):
                 try:
-                    row = img.anchor._from.row + 1
-                    img_name = f"temp_img_{row}_{idx}.png"
+                    # Robust Anchor Logic
+                    if hasattr(img.anchor, '_from'):
+                        row = img.anchor._from.row + 1
+                    elif hasattr(img.anchor, 'row'):
+                        row = img.anchor.row + 1
+                    else:
+                        continue 
+
+                    img_name = f"img_{row}_{idx}.png"
                     img_path = os.path.join(temp_dir, img_name)
-                    img.ref.save(img_path)
+                    
+                    if hasattr(img, 'ref'): # Pillow
+                        img.ref.save(img_path)
+                    else:
+                        img.save(img_path)
+                        
                     image_map[row] = img_path
                 except Exception as e:
-                    print(f"Image extract error: {e}")
+                    print(f"Img Error: {e}")
 
-        # 2. FIND HEADER (SMARTER)
+        # 2. FIND HEADER
         header_row_index = -1
         col_map = {}
-        
         for r in range(1, 20):
             row_values = [str(cell.value).strip() if cell.value else "" for cell in sheet[r]]
             if "ITEM" in row_values or "Price(RMB)" in row_values:
                 header_row_index = r
                 for idx, val in enumerate(row_values):
-                    # Save clean headers (no spaces)
                     col_map[val] = idx + 1 
                 break
         
@@ -121,10 +139,13 @@ def process_excel_preserve_images(filepath):
 
                 if boxes_count == 0: continue
 
+                # LOGIC: (CBM * Rate) / Qty
                 shipping_cost_box = cbm_per_box * GLOBAL_SETTINGS["shipping_rate"]
                 shipping_per_unit = shipping_cost_box / units_per_box
+                
                 product_base_dzd = rmb_price * GLOBAL_SETTINGS["exchange_rate"]
                 final_unit_cost = product_base_dzd + shipping_per_unit
+                
                 total_line_cost = final_unit_cost * (boxes_count * units_per_box)
                 grand_total_dzd += total_line_cost
 
@@ -152,50 +173,89 @@ def process_excel_preserve_images(filepath):
 def export_results_smart():
     data = SESSION_STATE["data"]
     filepath = SESSION_STATE["filepath"]
-    col_map = SESSION_STATE["col_map"]
     
     if not data or not filepath: return False, "No data"
 
     try:
         wb = openpyxl.load_workbook(filepath)
         sheet = wb.active
+        
         bold_font = Font(bold=True, color="FFFFFF")
         fill = PatternFill(start_color="000080", end_color="000080", fill_type="solid")
         thin_border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
 
-        # --- FIX: SMART SEARCH FOR 'TOTAL' COLUMN ---
-        target_col = None
-        
-        # Look for ANY header containing "Total", "TOTAL", "Total Amount" etc.
-        for header_name, col_idx in col_map.items():
-            if "total" in header_name.lower():
-                target_col = col_idx
-                break
-        
-        # If still not found, fallback to the column after Price(RMB)
-        if not target_col:
-            target_col = col_map.get("Price(RMB)", 5) + 1
-        
-        # Write Header
         h_row = SESSION_STATE["header_row"]
-        cell_header = sheet.cell(row=h_row, column=target_col)
-        cell_header.value = "Unit Cost (DZD)" # The New Title
-        cell_header.font = bold_font
-        cell_header.fill = fill
-        cell_header.alignment = Alignment(horizontal="center")
 
-        # Write Data
-        for item in data:
-            r = item["row_index"]
-            cell = sheet.cell(row=r, column=target_col)
-            cell.value = item["unit_cost"]
-            cell.border = thin_border
-            cell.alignment = Alignment(horizontal="center")
-            cell.font = Font(bold=True)
+        # 1. IDENTIFY COLUMNS
+        ctn_col = None
+        total_col = None
+        
+        # Scan headers to find Ctn and Total
+        for cell in sheet[h_row]:
+            val = str(cell.value).strip().lower()
+            if val in ["ctn", "carton", "box", "boxes", "qty (ctn)"]:
+                ctn_col = cell.column
+            elif "total" in val or "amount" in val:
+                total_col = cell.column
+        
+        # Fallback if Total not found -> Use last column + 1
+        if not total_col:
+            total_col = sheet.max_column + 1
 
-        # Save
+        # Fallback if Ctn not found -> Look up in col_map
+        if not ctn_col:
+            ctn_col = SESSION_STATE["col_map"].get("Ctn")
+
+        if ctn_col:
+            # 2. MOVE CTN DATA TO TOTAL COLUMN
+            # Header
+            cell_total_header = sheet.cell(row=h_row, column=total_col)
+            cell_total_header.value = "Ctn" # Rename Total to Ctn
+            cell_total_header.font = bold_font
+            cell_total_header.alignment = Alignment(horizontal="center")
+
+            # Data Move Loop
+            # We move the *original* values from Ctn column to Total column
+            for row in range(h_row + 1, sheet.max_row + 1):
+                old_val = sheet.cell(row=row, column=ctn_col).value
+                sheet.cell(row=row, column=total_col).value = old_val
+                # Add basic border
+                sheet.cell(row=row, column=total_col).border = thin_border
+                sheet.cell(row=row, column=total_col).alignment = Alignment(horizontal="center")
+
+            # 3. OVERWRITE CTN COLUMN WITH PRICE
+            # Header
+            cell_price_header = sheet.cell(row=h_row, column=ctn_col)
+            cell_price_header.value = "Unit Cost (DZD)"
+            cell_price_header.font = bold_font
+            cell_price_header.fill = fill # Blue BG
+            cell_price_header.alignment = Alignment(horizontal="center")
+
+            # Fill Prices
+            for item in data:
+                r = item["row_index"]
+                cell = sheet.cell(row=r, column=ctn_col)
+                cell.value = item["unit_cost"]
+                cell.font = Font(bold=True)
+                cell.border = thin_border
+                cell.alignment = Alignment(horizontal="center")
+
+        else:
+            # Emergency Fallback if no Ctn column exists at all (Insert after name)
+            # This shouldn't happen with your file structure
+            name_col = SESSION_STATE["col_map"].get("ITEM", 2)
+            target_col = name_col + 1
+            sheet.insert_cols(target_col)
+            sheet.cell(row=h_row, column=target_col).value = "Unit Cost (DZD)"
+            for item in data:
+                sheet.cell(row=item["row_index"], column=target_col).value = item["unit_cost"]
+
         timestamp = int(time.time())
-        output_name = f"/storage/emulated/0/Download/CostSheet_{timestamp}.xlsx"
+        if platform == 'android':
+            output_name = f"/storage/emulated/0/Download/CostSheet_{timestamp}.xlsx"
+        else:
+            output_name = os.path.join(os.path.expanduser("~"), "Downloads", f"CostSheet_{timestamp}.xlsx")
+
         wb.save(output_name)
         return True, output_name
 
@@ -203,6 +263,33 @@ def export_results_smart():
         return False, str(e)
 
 # --- UI COMPONENTS ---
+class GalleryCard(BoxLayout):
+    def __init__(self, item, **kwargs):
+        super().__init__(**kwargs)
+        self.orientation = 'vertical'
+        self.size_hint_y = None
+        self.height = dp(220) 
+        self.padding = 5
+        self.spacing = 5
+        with self.canvas.before:
+            Color(*COLOR_CARD_BG)
+            self.rect = Rectangle(pos=self.pos, size=self.size)
+        self.bind(pos=self.update_rect, size=self.update_rect)
+
+        img_source = item.get('image')
+        if img_source:
+            img = Image(source=img_source, size_hint_y=0.6, allow_stretch=True, keep_ratio=True)
+            self.add_widget(img)
+        else:
+            self.add_widget(Label(text="No Image", size_hint_y=0.6, color=(0.5,0.5,0.5,1)))
+
+        self.add_widget(Label(text=item['name'][:15] + "...", size_hint_y=0.2, color=COLOR_TEXT, bold=True))
+        self.add_widget(Label(text=f"{item['unit_cost']} DA", size_hint_y=0.2, color=COLOR_ACCENT, bold=True, font_size='18sp'))
+
+    def update_rect(self, *args):
+        self.rect.pos = self.pos
+        self.rect.size = self.size
+
 class InfoCard(BoxLayout):
     def __init__(self, item, **kwargs):
         super().__init__(**kwargs)
@@ -212,7 +299,6 @@ class InfoCard(BoxLayout):
         self.padding = 10
         self.spacing = 10
         
-        # Image Left
         img_source = item.get('image')
         if img_source:
             img = Image(source=img_source, size_hint_x=0.3, allow_stretch=True, keep_ratio=True)
@@ -221,7 +307,6 @@ class InfoCard(BoxLayout):
             lbl = Label(text="No IMG", size_hint_x=0.3, color=(0.5,0.5,0.5,1))
             self.add_widget(lbl)
 
-        # Text Right
         text_box = BoxLayout(orientation='vertical')
         top = BoxLayout()
         lbl_name = Label(text=f"[b]{item['name']}[/b]", markup=True, halign="left", valign="middle", color=COLOR_TEXT, font_size='16sp')
@@ -252,12 +337,19 @@ class TableRow(BoxLayout):
         self.add_widget(Label(text=str(item['qty']), size_hint_x=0.15, color=COLOR_SUBTEXT))
         self.add_widget(Label(text=f"{int(item['total_line']):,}", size_hint_x=0.25, color=COLOR_SUBTEXT))
 
+# --- SCREENS ---
+
 class HomeScreen(Screen):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         layout = BoxLayout(orientation='vertical', padding=40, spacing=30)
         layout.add_widget(Label(text="IMPORT CALCULATOR", font_size='28sp', bold=True, color=COLOR_ACCENT, size_hint=(1, 0.2)))
         layout.add_widget(Label(text="DZD Groupage Edition", font_size='16sp', color=COLOR_SUBTEXT, size_hint=(1, 0.1)))
+
+        # 1. PRICE CHECKER (UPDATED)
+        btn_conv = Button(text="🧮 QUICK PRICE CHECKER", size_hint=(1, 0.15), background_color=(0.1, 0.3, 0.5, 1), font_size='16sp')
+        btn_conv.bind(on_press=self.open_converter)
+        layout.add_widget(btn_conv)
 
         btn_import = Button(text="📂 IMPORT EXCEL", size_hint=(1, 0.2), background_color=(0.2, 0.2, 0.2, 1), font_size='18sp')
         btn_import.bind(on_press=self.show_file_chooser)
@@ -269,11 +361,70 @@ class HomeScreen(Screen):
         self.add_widget(layout)
 
     def go_settings(self, instance): self.manager.current = 'settings'
+
+    # --- UPDATED CONVERTER: NOW WITH QUANTITY ---
+    def open_converter(self, instance):
+        content = BoxLayout(orientation='vertical', padding=20, spacing=15)
+        
+        # Row 1: RMB
+        row1 = BoxLayout(spacing=10, size_hint_y=None, height=dp(40))
+        row1.add_widget(Label(text="RMB (Unit):", size_hint_x=0.4, color=COLOR_TEXT))
+        inp_rmb = TextInput(multiline=False, input_filter='float', hint_text="Price", write_tab=False)
+        row1.add_widget(inp_rmb)
+        
+        # Row 2: CBM
+        row2 = BoxLayout(spacing=10, size_hint_y=None, height=dp(40))
+        row2.add_widget(Label(text="CBM (Box):", size_hint_x=0.4, color=COLOR_TEXT))
+        inp_cbm = TextInput(multiline=False, input_filter='float', hint_text="Total Volume", text="0", write_tab=False)
+        row2.add_widget(inp_cbm)
+        
+        # Row 3: Qty (THE NEW FEATURE)
+        row3 = BoxLayout(spacing=10, size_hint_y=None, height=dp(40))
+        row3.add_widget(Label(text="Qty (Box):", size_hint_x=0.4, color=COLOR_TEXT))
+        inp_qty = TextInput(multiline=False, input_filter='int', hint_text="Pieces per Box", text="1", write_tab=False)
+        row3.add_widget(inp_qty)
+        
+        lbl_result = Label(text="0.00 DZD", font_size='28sp', color=COLOR_ACCENT, bold=True, size_hint_y=0.3)
+        
+        def calculate(inst):
+            try:
+                rmb = float(inp_rmb.text) if inp_rmb.text else 0
+                cbm = float(inp_cbm.text) if inp_cbm.text else 0
+                qty = float(inp_qty.text) if inp_qty.text else 1
+                if qty == 0: qty = 1
+                
+                # Formula: (CBM * 50000 / Qty) + (RMB * 36)
+                shipping_box = cbm * GLOBAL_SETTINGS["shipping_rate"]
+                shipping_unit = shipping_box / qty
+                base_cost = rmb * GLOBAL_SETTINGS["exchange_rate"]
+                
+                total = base_cost + shipping_unit
+                lbl_result.text = f"{total:,.2f} DA"
+            except:
+                lbl_result.text = "Error"
+
+        btn_calc = Button(text="CALCULATE COST", background_color=COLOR_ACCENT, size_hint_y=None, height=dp(50), bold=True)
+        btn_calc.bind(on_press=calculate)
+        
+        content.add_widget(row1)
+        content.add_widget(row2)
+        content.add_widget(row3)
+        content.add_widget(btn_calc)
+        content.add_widget(lbl_result)
+        
+        popup = Popup(title="Landing Cost Calculator", content=content, size_hint=(0.9, 0.6))
+        popup.open()
     
     def show_file_chooser(self, instance):
         request_android_permissions()
         content = BoxLayout(orientation='vertical')
-        filechooser = FileChooserIconView(path='/storage/emulated/0', filters=['*.xlsx'])
+        
+        if platform == 'android':
+            start_path = '/storage/emulated/0'
+        else:
+            start_path = os.path.expanduser("~")
+            
+        filechooser = FileChooserIconView(path=start_path, filters=['*.xlsx'])
         btn_box = BoxLayout(size_hint_y=0.1)
         btn_load = Button(text="Load")
         btn_cancel = Button(text="Cancel")
@@ -300,7 +451,7 @@ class ResultsScreen(Screen):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.layout = BoxLayout(orientation='vertical', padding=10, spacing=10)
-        self.view_mode = "card" 
+        self.view_mode = "list" 
         
         dash = BoxLayout(size_hint_y=None, height=dp(80), padding=10, spacing=10)
         btn_back = Button(text="<", size_hint_x=None, width=dp(50), background_color=(0.3,0.3,0.3,1))
@@ -316,8 +467,10 @@ class ResultsScreen(Screen):
         controls = BoxLayout(size_hint_y=None, height=dp(50), spacing=10)
         self.search_input = TextInput(hint_text="Search product...", size_hint_x=0.7, multiline=False)
         self.search_input.bind(text=self.filter_list)
-        self.btn_view = Button(text="Table View", size_hint_x=0.3, background_color=(0.2,0.2,0.2,1))
+        
+        self.btn_view = Button(text="View: List", size_hint_x=0.3, background_color=(0.2,0.2,0.2,1))
         self.btn_view.bind(on_press=self.toggle_view)
+
         controls.add_widget(self.search_input)
         controls.add_widget(self.btn_view)
         self.layout.add_widget(controls)
@@ -342,29 +495,45 @@ class ResultsScreen(Screen):
         success, name = export_results_smart()
         if success: Popup(title="Success", content=Label(text=f"Saved:\n{name}"), size_hint=(0.7,0.4)).open()
         else: Popup(title="Error", content=Label(text=str(name)), size_hint=(0.8,0.4)).open()
+    
     def toggle_view(self, instance):
-        if self.view_mode == "card":
+        if self.view_mode == "list":
             self.view_mode = "table"
+            self.btn_view.text = "View: Table"
             self.table_header.opacity = 1
-        else:
-            self.view_mode = "card"
+            self.grid.cols = 1
+        elif self.view_mode == "table":
+            self.view_mode = "gallery"
+            self.btn_view.text = "View: Gallery"
             self.table_header.opacity = 0
+            self.grid.cols = 2
+        else:
+            self.view_mode = "list"
+            self.btn_view.text = "View: List"
+            self.table_header.opacity = 0
+            self.grid.cols = 1
         self.load_data() 
+        
     def filter_list(self, instance, value):
         self.load_data(filter_text=value)
+        
     def load_data(self, filter_text=""):
         self.grid.clear_widgets()
         total_d = SESSION_STATE.get("total_investment", 0)
         count = len(SESSION_STATE["data"])
         self.lbl_summary.text = f"[b]{count} Items[/b]\nTotal: [color=00cc66]{int(total_d):,} DA[/color]"
         filter_text = filter_text.lower()
+        
         for item in SESSION_STATE["data"]:
             if filter_text and filter_text not in item['name'].lower(): continue
-            if self.view_mode == "card":
+            
+            if self.view_mode == "list":
                 self.grid.add_widget(InfoCard(item))
                 self.grid.add_widget(Button(size_hint_y=None, height=1, background_color=(0.3,0.3,0.3,1)))
-            else:
+            elif self.view_mode == "table":
                 self.grid.add_widget(TableRow(item))
+            elif self.view_mode == "gallery":
+                self.grid.add_widget(GalleryCard(item))
 
 class SettingsScreen(Screen):
     def __init__(self, **kwargs):
