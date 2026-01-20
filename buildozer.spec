@@ -23,3 +23,4 @@ android.permissions = READ_MEDIA_DOCUMENTS,READ_EXTERNAL_STORAGE,WRITE_EXTERNAL_
 [buildozer]
 log_level = 2
 warn_on_root = 0
+
