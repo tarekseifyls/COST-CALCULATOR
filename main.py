@@ -7,7 +7,7 @@ from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.gridlayout import GridLayout
 from kivy.uix.label import Label
 from kivy.uix.button import Button
-from kivy.uix.image import Image, AsyncImage
+from kivy.uix.image import Image
 from kivy.uix.textinput import TextInput
 from kivy.uix.scrollview import ScrollView
 from kivy.uix.screenmanager import ScreenManager, Screen
@@ -61,43 +61,37 @@ def request_android_permissions():
         else:
             request_permissions([Permission.READ_EXTERNAL_STORAGE, Permission.WRITE_EXTERNAL_STORAGE])
 
-# --- LOGIC ENGINE (NOW WITH IMAGES) ---
+# --- LOGIC ENGINE ---
 def process_excel_preserve_images(filepath):
     try:
         wb = openpyxl.load_workbook(filepath, data_only=True)
         sheet = wb.active
         
         # 1. EXTRACT IMAGES
-        # Map row number to image path
         image_map = {}
-        temp_dir = App.get_running_app().user_data_dir  # Save in app's private folder
+        temp_dir = App.get_running_app().user_data_dir 
         
-        # OpenPyXL stores images in sheet.images
         if hasattr(sheet, 'images'):
             for idx, img in enumerate(sheet.images):
                 try:
-                    # Get the row the image is anchored to (0-indexed in anchor, so +1)
-                    # Note: Anchor format varies, usually _from.row
                     row = img.anchor._from.row + 1
-                    
-                    # Save image to a temp file
                     img_name = f"temp_img_{row}_{idx}.png"
                     img_path = os.path.join(temp_dir, img_name)
-                    
-                    # Save using Pillow (img.ref is the PIL object usually)
                     img.ref.save(img_path)
                     image_map[row] = img_path
                 except Exception as e:
                     print(f"Image extract error: {e}")
 
-        # 2. FIND HEADER
+        # 2. FIND HEADER (SMARTER)
         header_row_index = -1
         col_map = {}
+        
         for r in range(1, 20):
-            row_values = [str(cell.value) if cell.value else "" for cell in sheet[r]]
+            row_values = [str(cell.value).strip() if cell.value else "" for cell in sheet[r]]
             if "ITEM" in row_values or "Price(RMB)" in row_values:
                 header_row_index = r
                 for idx, val in enumerate(row_values):
+                    # Save clean headers (no spaces)
                     col_map[val] = idx + 1 
                 break
         
@@ -134,7 +128,6 @@ def process_excel_preserve_images(filepath):
                 total_line_cost = final_unit_cost * (boxes_count * units_per_box)
                 grand_total_dzd += total_line_cost
 
-                # Check if this row has an image
                 img_path = image_map.get(r, None)
 
                 results.append({
@@ -144,7 +137,7 @@ def process_excel_preserve_images(filepath):
                     "total_line": round(total_line_cost, 2),
                     "rmb_price": rmb_price,
                     "qty": int(boxes_count * units_per_box),
-                    "image": img_path  # Add image path to data
+                    "image": img_path 
                 })
 
             except Exception:
@@ -157,18 +150,55 @@ def process_excel_preserve_images(filepath):
         return None, str(e)
 
 def export_results_smart():
-    # (Same export logic, abbreviated for space)
     data = SESSION_STATE["data"]
     filepath = SESSION_STATE["filepath"]
+    col_map = SESSION_STATE["col_map"]
+    
     if not data or not filepath: return False, "No data"
+
     try:
         wb = openpyxl.load_workbook(filepath)
         sheet = wb.active
-        # ... (Export logic unchanged)
+        bold_font = Font(bold=True, color="FFFFFF")
+        fill = PatternFill(start_color="000080", end_color="000080", fill_type="solid")
+        thin_border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
+
+        # --- FIX: SMART SEARCH FOR 'TOTAL' COLUMN ---
+        target_col = None
+        
+        # Look for ANY header containing "Total", "TOTAL", "Total Amount" etc.
+        for header_name, col_idx in col_map.items():
+            if "total" in header_name.lower():
+                target_col = col_idx
+                break
+        
+        # If still not found, fallback to the column after Price(RMB)
+        if not target_col:
+            target_col = col_map.get("Price(RMB)", 5) + 1
+        
+        # Write Header
+        h_row = SESSION_STATE["header_row"]
+        cell_header = sheet.cell(row=h_row, column=target_col)
+        cell_header.value = "Unit Cost (DZD)" # The New Title
+        cell_header.font = bold_font
+        cell_header.fill = fill
+        cell_header.alignment = Alignment(horizontal="center")
+
+        # Write Data
+        for item in data:
+            r = item["row_index"]
+            cell = sheet.cell(row=r, column=target_col)
+            cell.value = item["unit_cost"]
+            cell.border = thin_border
+            cell.alignment = Alignment(horizontal="center")
+            cell.font = Font(bold=True)
+
+        # Save
         timestamp = int(time.time())
         output_name = f"/storage/emulated/0/Download/CostSheet_{timestamp}.xlsx"
         wb.save(output_name)
         return True, output_name
+
     except Exception as e:
         return False, str(e)
 
@@ -176,27 +206,23 @@ def export_results_smart():
 class InfoCard(BoxLayout):
     def __init__(self, item, **kwargs):
         super().__init__(**kwargs)
-        self.orientation = 'horizontal' # changed to horizontal to hold image on left
+        self.orientation = 'horizontal' 
         self.size_hint_y = None
         self.height = dp(120)
         self.padding = 10
         self.spacing = 10
         
-        # 1. IMAGE SECTION
+        # Image Left
         img_source = item.get('image')
         if img_source:
-            # If image exists, show it
             img = Image(source=img_source, size_hint_x=0.3, allow_stretch=True, keep_ratio=True)
             self.add_widget(img)
         else:
-            # Placeholder if no image
             lbl = Label(text="No IMG", size_hint_x=0.3, color=(0.5,0.5,0.5,1))
             self.add_widget(lbl)
 
-        # 2. TEXT SECTION (Right Side)
+        # Text Right
         text_box = BoxLayout(orientation='vertical')
-        
-        # Top Row: Name + Cost
         top = BoxLayout()
         lbl_name = Label(text=f"[b]{item['name']}[/b]", markup=True, halign="left", valign="middle", color=COLOR_TEXT, font_size='16sp')
         lbl_name.bind(size=lbl_name.setter('text_size'))
@@ -204,7 +230,6 @@ class InfoCard(BoxLayout):
         top.add_widget(lbl_name)
         top.add_widget(lbl_cost)
         
-        # Bottom Row: Details
         bot = BoxLayout()
         lbl_detail = Label(text=f"Qty: {item['qty']} | RMB: {item['rmb_price']}", color=COLOR_SUBTEXT, font_size='13sp')
         lbl_total = Label(text=f"Total: {int(item['total_line']):,} DA", color=COLOR_SUBTEXT, font_size='13sp', halign='right')
@@ -213,11 +238,9 @@ class InfoCard(BoxLayout):
         
         text_box.add_widget(top)
         text_box.add_widget(bot)
-        
         self.add_widget(text_box)
 
 class TableRow(BoxLayout):
-    # (Same as before)
     def __init__(self, item, **kwargs):
         super().__init__(**kwargs)
         self.orientation = 'horizontal'
@@ -230,7 +253,6 @@ class TableRow(BoxLayout):
         self.add_widget(Label(text=f"{int(item['total_line']):,}", size_hint_x=0.25, color=COLOR_SUBTEXT))
 
 class HomeScreen(Screen):
-    # (Same logic as previous step)
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         layout = BoxLayout(orientation='vertical', padding=40, spacing=30)
@@ -251,8 +273,7 @@ class HomeScreen(Screen):
     def show_file_chooser(self, instance):
         request_android_permissions()
         content = BoxLayout(orientation='vertical')
-        filechooser = FileChooserIconView(path='/storage/emulated/0', filters=['*.xlsx']) # Start in main storage
-        
+        filechooser = FileChooserIconView(path='/storage/emulated/0', filters=['*.xlsx'])
         btn_box = BoxLayout(size_hint_y=0.1)
         btn_load = Button(text="Load")
         btn_cancel = Button(text="Cancel")
@@ -276,7 +297,6 @@ class HomeScreen(Screen):
         popup.open()
 
 class ResultsScreen(Screen):
-    # (Same as before, logic connects InfoCard with images)
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.layout = BoxLayout(orientation='vertical', padding=10, spacing=10)
@@ -303,7 +323,10 @@ class ResultsScreen(Screen):
         self.layout.add_widget(controls)
 
         self.table_header = BoxLayout(size_hint_y=None, height=dp(30), spacing=10)
-        # (Header labels...)
+        self.table_header.add_widget(Label(text="Product", size_hint_x=0.5, color=COLOR_ACCENT))
+        self.table_header.add_widget(Label(text="Cost", size_hint_x=0.2, color=COLOR_ACCENT))
+        self.table_header.add_widget(Label(text="Qty", size_hint_x=0.15, color=COLOR_ACCENT))
+        self.table_header.add_widget(Label(text="Total", size_hint_x=0.25, color=COLOR_ACCENT))
         self.table_header.opacity = 0 
         self.layout.add_widget(self.table_header)
 
@@ -318,6 +341,7 @@ class ResultsScreen(Screen):
     def export(self, i):
         success, name = export_results_smart()
         if success: Popup(title="Success", content=Label(text=f"Saved:\n{name}"), size_hint=(0.7,0.4)).open()
+        else: Popup(title="Error", content=Label(text=str(name)), size_hint=(0.8,0.4)).open()
     def toggle_view(self, instance):
         if self.view_mode == "card":
             self.view_mode = "table"
@@ -337,13 +361,12 @@ class ResultsScreen(Screen):
         for item in SESSION_STATE["data"]:
             if filter_text and filter_text not in item['name'].lower(): continue
             if self.view_mode == "card":
-                self.grid.add_widget(InfoCard(item)) # InfoCard now handles images
+                self.grid.add_widget(InfoCard(item))
                 self.grid.add_widget(Button(size_hint_y=None, height=1, background_color=(0.3,0.3,0.3,1)))
             else:
                 self.grid.add_widget(TableRow(item))
 
 class SettingsScreen(Screen):
-    # (Same as before)
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         layout = BoxLayout(orientation='vertical', padding=20, spacing=20)
