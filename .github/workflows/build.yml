@@ -36,21 +36,23 @@ jobs:
             libffi-dev libssl-dev autoconf libtool pkg-config \
             unzip zip
 
-      - name: Install Python tools
+      - name: Install Buildozer
         run: |
           pip install --upgrade pip
           pip install buildozer cython==0.29.33
 
-      - name: Increase Gradle memory
-        run: |
-          mkdir -p ~/.gradle
-          echo "org.gradle.jvmargs=-Xmx4096m" >> ~/.gradle/gradle.properties
-
       - name: Verify project files
         run: |
+          pwd
           ls -la
           test -f buildozer.spec
 
-      - name: Clean Build
+      - name: Build APK (first init)
         run: |
-          buildozer android clean
+          yes | buildozer android debug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: CostCalculator-APK
+          path: bin/*.apk
