@@ -14,31 +14,20 @@ from kivy.uix.filechooser import FileChooserIconView
 from kivy.uix.popup import Popup
 from kivy.core.window import Window
 from kivy.metrics import dp
-from kivy.uix.togglebutton import ToggleButton
-from android.storage import primary_external_storage_path
 from kivy.utils import platform
-
-# --- ASK FOR PERMISSION ON ANDROID ---
-def request_android_permissions():
-    if platform == 'android':
-        from android.permissions import request_permissions, Permission
-        request_permissions([Permission.READ_EXTERNAL_STORAGE, Permission.WRITE_EXTERNAL_STORAGE])
-
-# Call this function immediately when the app starts
-request_android_permissions()
+from kivy.clock import Clock
 
 # --- VISUAL THEME ---
-COLOR_BG = (0.1, 0.1, 0.1, 1)       # Dark Grey
-COLOR_CARD = (0.18, 0.18, 0.18, 1)  # Lighter Grey
-COLOR_ACCENT = (0, 0.8, 0.4, 1)     # Money Green
-COLOR_TEXT = (1, 1, 1, 1)           # White
-COLOR_SUBTEXT = (0.7, 0.7, 0.7, 1)  # Light Grey
+COLOR_BG = (0.1, 0.1, 0.1, 1)       
+COLOR_ACCENT = (0, 0.8, 0.4, 1)     
+COLOR_TEXT = (1, 1, 1, 1)           
+COLOR_SUBTEXT = (0.7, 0.7, 0.7, 1)  
 
 # --- CONFIGURATION ---
 GLOBAL_SETTINGS = {
     "exchange_rate": 36.0,    
     "shipping_rate": 50000.0, 
-    "margin_percent": 0.0    
+    "margin_percent": 0.0     
 }
 
 SESSION_STATE = {
@@ -48,6 +37,41 @@ SESSION_STATE = {
     "col_map": {},
     "total_investment": 0
 }
+
+# --- PERMISSION LOGIC (THE FIX) ---
+def request_android_permissions():
+    """
+    Forces the phone to ask for 'All Files Access' on Android 11+
+    """
+    if platform == 'android':
+        from jnius import autoclass
+        from android.permissions import request_permissions, Permission
+        
+        # Get Android Version
+        Build = autoclass('android.os.Build')
+        VERSION = autoclass('android.os.Build$VERSION')
+        
+        # If Android 11 (SDK 30) or newer
+        if VERSION.SDK_INT >= 30:
+            Environment = autoclass('android.os.Environment')
+            
+            # Check if we already have access
+            if not Environment.isExternalStorageManager():
+                # If not, OPEN SETTINGS
+                Intent = autoclass('android.content.Intent')
+                Settings = autoclass('android.provider.Settings')
+                Uri = autoclass('android.net.Uri')
+                PythonActivity = autoclass('org.kivy.android.PythonActivity')
+                
+                intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION)
+                activity = PythonActivity.mActivity
+                package_uri = Uri.parse("package:" + activity.getPackageName())
+                intent.setData(package_uri)
+                
+                activity.startActivity(intent)
+        else:
+            # Old Phones (Android 10 and below)
+            request_permissions([Permission.READ_EXTERNAL_STORAGE, Permission.WRITE_EXTERNAL_STORAGE])
 
 # --- LOGIC ENGINE ---
 def process_excel_preserve_images(filepath):
@@ -151,18 +175,16 @@ def export_results_smart():
             cell.alignment = Alignment(horizontal="center")
             cell.font = Font(bold=True)
 
+        # Save to Downloads folder for easy access
         timestamp = int(time.time())
-        output_name = f"CostSheet_{timestamp}.xlsx"
+        output_name = f"/storage/emulated/0/Download/CostSheet_{timestamp}.xlsx"
         wb.save(output_name)
         return True, output_name
 
-    except PermissionError:
-        return False, "ERROR: Close the Excel file and try again!"
     except Exception as e:
         return False, str(e)
 
-# --- CUSTOM UI COMPONENTS ---
-
+# --- UI COMPONENTS ---
 class InfoCard(BoxLayout):
     def __init__(self, item, **kwargs):
         super().__init__(**kwargs)
@@ -172,20 +194,15 @@ class InfoCard(BoxLayout):
         self.padding = 15
         self.spacing = 5
         
-        # Fake Card Background (Gray Box)
-        # In pure Kivy we'd use Canvas, but for simplicity we rely on the parent Grid background
-
-        # Top Row: Name + Cost
         top = BoxLayout()
         lbl_name = Label(text=f"[b]{item['name']}[/b]", markup=True, halign="left", valign="middle", color=COLOR_TEXT, font_size='16sp')
-        lbl_name.bind(size=lbl_name.setter('text_size')) # Text Wrap
+        lbl_name.bind(size=lbl_name.setter('text_size'))
         
         lbl_cost = Label(text=f"{item['unit_cost']} DA", color=COLOR_ACCENT, font_size='20sp', bold=True, size_hint_x=0.4, halign='right')
         
         top.add_widget(lbl_name)
         top.add_widget(lbl_cost)
         
-        # Bottom Row: Details
         bot = BoxLayout()
         lbl_detail = Label(text=f"Qty: {item['qty']} | RMB: {item['rmb_price']}", color=COLOR_SUBTEXT, font_size='13sp')
         lbl_total = Label(text=f"Line Total: {int(item['total_line']):,} DA", color=COLOR_SUBTEXT, font_size='13sp', halign='right')
@@ -195,9 +212,7 @@ class InfoCard(BoxLayout):
         
         self.add_widget(top)
         self.add_widget(bot)
-        
-        # Separator Line
-        self.add_widget(Label(size_hint_y=None, height=1)) # Spacer
+        self.add_widget(Label(size_hint_y=None, height=1)) 
 
 class TableRow(BoxLayout):
     def __init__(self, item, **kwargs):
@@ -212,26 +227,21 @@ class TableRow(BoxLayout):
         self.add_widget(Label(text=str(item['qty']), size_hint_x=0.15, color=COLOR_SUBTEXT))
         self.add_widget(Label(text=f"{int(item['total_line']):,}", size_hint_x=0.25, color=COLOR_SUBTEXT))
 
-# --- SCREENS ---
-
 class HomeScreen(Screen):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         layout = BoxLayout(orientation='vertical', padding=40, spacing=30)
         
-        # Header
         header = Label(text="IMPORT CALCULATOR", font_size='28sp', bold=True, color=COLOR_ACCENT, size_hint=(1, 0.2))
         sub = Label(text="DZD Groupage Edition", font_size='16sp', color=COLOR_SUBTEXT, size_hint=(1, 0.1))
         
         layout.add_widget(header)
         layout.add_widget(sub)
 
-        # Big Import Button
         btn_import = Button(text="📂 IMPORT EXCEL", size_hint=(1, 0.2), background_color=(0.2, 0.2, 0.2, 1), font_size='18sp')
         btn_import.bind(on_press=self.show_file_chooser)
         layout.add_widget(btn_import)
 
-        # Settings Button
         btn_settings = Button(text="⚙️ SETTINGS", size_hint=(1, 0.15), background_color=(0.1, 0.1, 0.1, 1), color=COLOR_SUBTEXT)
         btn_settings.bind(on_press=self.go_settings)
         layout.add_widget(btn_settings)
@@ -239,11 +249,16 @@ class HomeScreen(Screen):
         self.add_widget(layout)
 
     def go_settings(self, instance): self.manager.current = 'settings'
+    
     def show_file_chooser(self, instance):
-        # (File Chooser Logic Same as Before)
+        # Trigger permission check immediately
+        request_android_permissions()
+        
         content = BoxLayout(orientation='vertical')
-        storage_path = primary_external_storage_path()
-        filechooser = FileChooserIconView(path=storage_path, filters=['*.xlsx'])
+        
+        # *** FIX: Start in the Main Storage Folder ***
+        filechooser = FileChooserIconView(path='/storage/emulated/0', filters=['*.xlsx'])
+        
         btn_box = BoxLayout(size_hint_y=0.1)
         btn_load = Button(text="Load")
         btn_cancel = Button(text="Cancel")
@@ -261,7 +276,9 @@ class HomeScreen(Screen):
                     self.manager.get_screen('results').load_data()
                     self.manager.current = 'results'
                     popup.dismiss()
-                else: print(status)
+                else: 
+                    # Show error in a popup if needed
+                    print(status)
         btn_load.bind(on_press=load)
         btn_cancel.bind(on_press=popup.dismiss)
         popup.open()
@@ -270,18 +287,14 @@ class ResultsScreen(Screen):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.layout = BoxLayout(orientation='vertical', padding=10, spacing=10)
-        self.view_mode = "card" # card or table
+        self.view_mode = "card" 
         
-        # --- TOP DASHBOARD ---
         dash = BoxLayout(size_hint_y=None, height=dp(80), padding=10, spacing=10)
-        # Back Button
         btn_back = Button(text="<", size_hint_x=None, width=dp(50), background_color=(0.3,0.3,0.3,1))
         btn_back.bind(on_press=self.back)
         
-        # Summary Box
         self.lbl_summary = Label(text="Loading...", markup=True, halign='center')
         
-        # Export Button
         btn_exp = Button(text="SAVE\nEXCEL", size_hint_x=None, width=dp(80), background_color=COLOR_ACCENT, bold=True)
         btn_exp.bind(on_press=self.export)
 
@@ -290,13 +303,10 @@ class ResultsScreen(Screen):
         dash.add_widget(btn_exp)
         self.layout.add_widget(dash)
         
-        # --- CONTROLS (Search + Toggle) ---
         controls = BoxLayout(size_hint_y=None, height=dp(50), spacing=10)
-        
         self.search_input = TextInput(hint_text="Search product...", size_hint_x=0.7, multiline=False)
         self.search_input.bind(text=self.filter_list)
         
-        # Toggle
         self.btn_view = Button(text="Table View", size_hint_x=0.3, background_color=(0.2,0.2,0.2,1))
         self.btn_view.bind(on_press=self.toggle_view)
 
@@ -304,14 +314,12 @@ class ResultsScreen(Screen):
         controls.add_widget(self.btn_view)
         self.layout.add_widget(controls)
 
-        # --- LIST AREA ---
-        # Header Row for Table (Hidden by default)
         self.table_header = BoxLayout(size_hint_y=None, height=dp(30), spacing=10)
         self.table_header.add_widget(Label(text="Product", size_hint_x=0.5, color=COLOR_ACCENT))
         self.table_header.add_widget(Label(text="Cost", size_hint_x=0.2, color=COLOR_ACCENT))
         self.table_header.add_widget(Label(text="Qty", size_hint_x=0.15, color=COLOR_ACCENT))
         self.table_header.add_widget(Label(text="Total", size_hint_x=0.25, color=COLOR_ACCENT))
-        self.table_header.opacity = 0 # Hidden initially
+        self.table_header.opacity = 0 
         self.layout.add_widget(self.table_header)
 
         self.scroll = ScrollView()
@@ -327,7 +335,7 @@ class ResultsScreen(Screen):
     def export(self, i):
         success, name = export_results_smart()
         if success: 
-            Popup(title="Success", content=Label(text=f"Saved:\n{name}"), size_hint=(0.7,0.4)).open()
+            Popup(title="Success", content=Label(text=f"Saved to Downloads:\n{name}"), size_hint=(0.7,0.4)).open()
         else:
             Popup(title="Error", content=Label(text=str(name)), size_hint=(0.8,0.4)).open()
 
@@ -340,34 +348,28 @@ class ResultsScreen(Screen):
             self.view_mode = "card"
             self.btn_view.text = "Table View"
             self.table_header.opacity = 0
-        self.load_data() # Refresh list
+        self.load_data() 
 
     def filter_list(self, instance, value):
         self.load_data(filter_text=value)
 
     def load_data(self, filter_text=""):
         self.grid.clear_widgets()
-        
-        # Update Summary Top
         total_d = SESSION_STATE.get("total_investment", 0)
         count = len(SESSION_STATE["data"])
         self.lbl_summary.text = f"[b]{count} Items[/b]\nTotal: [color=00cc66]{int(total_d):,} DA[/color]"
 
         filter_text = filter_text.lower()
-        
         for item in SESSION_STATE["data"]:
             if filter_text and filter_text not in item['name'].lower():
                 continue
-            
             if self.view_mode == "card":
                 self.grid.add_widget(InfoCard(item))
-                # Add a thin line separator
                 self.grid.add_widget(Button(size_hint_y=None, height=1, background_color=(0.3,0.3,0.3,1)))
             else:
                 self.grid.add_widget(TableRow(item))
 
 class SettingsScreen(Screen):
-    # (Same as before, just styled darker)
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         layout = BoxLayout(orientation='vertical', padding=20, spacing=20)
@@ -403,9 +405,11 @@ class ImportApp(App):
         sm.add_widget(HomeScreen(name='home'))
         sm.add_widget(SettingsScreen(name='settings'))
         sm.add_widget(ResultsScreen(name='results'))
+        
+        # Trigger permission logic when app is built
+        Clock.schedule_once(lambda dt: request_android_permissions(), 1)
+        
         return sm
 
 if __name__ == '__main__':
-
     ImportApp().run()
-
