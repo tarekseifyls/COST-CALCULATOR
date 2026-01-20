@@ -7,8 +7,8 @@ source.include_exts = py,png,jpg,kv,atlas,xlsx
 version = 0.1
 
 # 1. CLEAN REQUIREMENTS (Removed 'androidstorage4kivy' which causes crashes)
-requirements = python3,kivy,android,openpyxl,et_xmlfile,jdcal
-
+# Added 'pillow' to the list
+requirements = python3,kivy,android,openpyxl,et_xmlfile,jdcal,pillow
 orientation = portrait
 fullscreen = 0
 
@@ -26,3 +26,4 @@ p4a.branch = master
 [buildozer]
 log_level = 2
 warn_on_root = 0
+
