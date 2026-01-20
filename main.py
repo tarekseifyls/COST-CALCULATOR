@@ -30,7 +30,7 @@ def request_android_permissions():
             Permission.READ_MEDIA_DOCUMENTS
         ])
 
-request_android_permissions()
+
 
 # --- STORAGE PATHS ---
 shared_storage = SharedStorage()
@@ -184,13 +184,16 @@ class HomeScreen(Screen):
 # (ResultsScreen, SettingsScreen, InfoCard etc stay EXACTLY the same as yours)
 
 class ImportApp(App):
+    def on_start(self):
+        request_android_permissions()
+
     def build(self):
         Window.clearcolor = COLOR_BG
         sm = ScreenManager()
-        sm.add_widget(HomeScreen(name="home"))
-        sm.add_widget(SettingsScreen(name="settings"))
-        sm.add_widget(ResultsScreen(name="results"))
+        sm.add_widget(HomeScreen(name='home'))
+        sm.add_widget(SettingsScreen(name='settings'))
+        sm.add_widget(ResultsScreen(name='results'))
         return sm
-
 if __name__ == "__main__":
     ImportApp().run()
+
